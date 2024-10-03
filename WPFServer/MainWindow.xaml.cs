@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.IO;
+using System.Windows.Input;
 
 namespace WPFServer
 {
@@ -54,7 +55,14 @@ namespace WPFServer
                 Dispatcher.Invoke(() => AddMessageToChat(textFromClient, false));
             }
         }
-        
+        private void UserInput_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Enter) 
+            {
+                e.Handled = true;
+                SendBtnClicked(this, new RoutedEventArgs()); 
+            }
+        }
         private void SendBtnClicked(object sender, RoutedEventArgs e)
         {
             string userInput = UserInput.Text.ToString();
