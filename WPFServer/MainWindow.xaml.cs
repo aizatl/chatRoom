@@ -10,6 +10,7 @@ using System.Windows.Media;
 using System.IO;
 using System.Windows.Input;
 using System.Collections.Generic;
+using System.Xml.Linq;
 
 namespace WPFServer
 {
@@ -27,23 +28,38 @@ namespace WPFServer
         {
             TcpListener listener = new TcpListener(IPAddress.Any, 12345);
             listener.Start();
-            AddMessageToChat("Waiting for client", false, true);
+            AddMessageToChat("Waiting for client", true);
             int clientCount = 1;
             while (true)
             {
                 TcpClient client = await listener.AcceptTcpClientAsync();
                 clients.Add(client);
                 ClientCounting.Text = clientCount.ToString();
-                string clientName = "Client "+ clientCount;
                 clientCount++;
-                clientIdentifiers[client] = clientName;
-
-                AddMessageToChat($"{clientName} connected", false, true);
-                bool firstTime = true;
-                WriteToClient("You are " + clientName, client, firstTime);
+                await ReceiveName(client);
                 _ = HandleClient(client);
             }
         }
+        private async Task ReceiveName(TcpClient client)
+        {
+            NetworkStream stream = client.GetStream();
+            byte[] buffer = new byte[1024];
+
+            int byteCount = await stream.ReadAsync(buffer, 0, buffer.Length);
+            string message = Encoding.ASCII.GetString(buffer, 0, byteCount);
+
+            if (message.ToLower() == "exit")
+            {
+                clients.Remove(client);
+                AddMessageToChat($"{message} disconnected", true);
+            }
+            else
+            {
+                clientIdentifiers[client] = message;
+                AddMessageToChat($"{message} connected", true);
+            }
+        }
+
 
         private async Task HandleClient(TcpClient client)
         {
@@ -60,7 +76,7 @@ namespace WPFServer
                 if (message.ToLower() == "exit")
                 {
                     clients.Remove(client);
-                    AddMessageToChat($"{clientName} disconnected", false, true);
+                    AddMessageToChat($"{clientName} disconnected", true);
                     break;
                 }
                 string messageWithClient = clientName + ": " + message;
@@ -97,7 +113,7 @@ namespace WPFServer
             }
             
         }
-        private void AddMessageToChat(string message, bool isClient, bool justConnect = false)
+        private void AddMessageToChat(string message, bool justConnect = false)
         {
             TextBlock messageBlock = new TextBlock();
             if (justConnect)
@@ -123,7 +139,7 @@ namespace WPFServer
                     Margin = new Thickness(5),
                     TextWrapping = TextWrapping.Wrap,
                     Background = new SolidColorBrush(Colors.LightBlue),
-                    HorizontalAlignment = isClient ? HorizontalAlignment.Left : HorizontalAlignment.Right,
+                    HorizontalAlignment = HorizontalAlignment.Left,
                     Padding = new Thickness(1),
                     MaxWidth = 300
                 };
