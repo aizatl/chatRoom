@@ -9,12 +9,14 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.IO;
 using System.Windows.Input;
+using System.Collections.Generic;
 
 namespace WPFServer
 {
     public partial class MainWindow : Window
     {
-        private NetworkStream stream;
+        private List<TcpClient> clients = new List<TcpClient>();
+        private Dictionary<TcpClient, string> clientIdentifiers = new Dictionary<TcpClient, string>();
         public MainWindow()
         {
             InitializeComponent();
@@ -26,61 +28,74 @@ namespace WPFServer
             TcpListener listener = new TcpListener(IPAddress.Any, 12345);
             listener.Start();
             AddMessageToChat("Waiting for client", false, true);
+            int clientCount = 1;
+            while (true)
+            {
+                TcpClient client = await listener.AcceptTcpClientAsync();
+                clients.Add(client);
+                ClientCounting.Text = clientCount.ToString();
+                string clientName = "Client "+ clientCount;
+                clientCount++;
+                clientIdentifiers[client] = clientName;
 
-            TcpClient client = await listener.AcceptTcpClientAsync();
-            AddMessageToChat("Client connected", false, true);
-            this.stream = client.GetStream();
-
-            await Task.WhenAll(ReadFromClient(stream));
-           
-            client.Close();
-            listener.Stop();
-            Console.WriteLine("Server has stopped.");
+                AddMessageToChat($"{clientName} connected", false, true);
+                bool firstTime = true;
+                WriteToClient("You are " + clientName, client, firstTime);
+                _ = HandleClient(client);
+            }
         }
 
-        private async Task ReadFromClient(NetworkStream stream)
+        private async Task HandleClient(TcpClient client)
         {
+            NetworkStream stream = client.GetStream();
             byte[] buffer = new byte[1024];
+
             while (true)
             {
                 int byteCount = await stream.ReadAsync(buffer, 0, buffer.Length);
-                string textFromClient = Encoding.ASCII.GetString(buffer, 0, byteCount);
+                if (byteCount == 0) break;  
 
-                if (textFromClient.ToLower() == "exit")
+                string message = Encoding.ASCII.GetString(buffer, 0, byteCount);
+                string clientName = clientIdentifiers[client];
+                if (message.ToLower() == "exit")
                 {
-                    Application.Current.Shutdown();
+                    clients.Remove(client);
+                    AddMessageToChat($"{clientName} disconnected", false, true);
                     break;
                 }
+                string messageWithClient = clientName + ": " + message;
+                AddMessageToChat(messageWithClient, false);  
+                WriteToClient(messageWithClient, client); 
+            }
 
-                Dispatcher.Invoke(() => AddMessageToChat(textFromClient, false));
-            }
+            client.Close();
         }
-        private void UserInput_KeyDown(object sender, KeyEventArgs e)
+        private void WriteToClient(string message, TcpClient sender, bool firstTime = false)
         {
-            if (e.Key == Key.Enter) 
+            byte[] data = Encoding.ASCII.GetBytes(message);
+
+            if (firstTime)
             {
-                e.Handled = true;
-                SendBtnClicked(this, new RoutedEventArgs()); 
+                foreach (var client in clients)
+                {
+                    if (client == sender)
+                    {
+                        NetworkStream stream = client.GetStream();
+                        stream.Write(data, 0, data.Length);
+                    }
+                }
             }
-        }
-        private void SendBtnClicked(object sender, RoutedEventArgs e)
-        {
-            string userInput = UserInput.Text.ToString();
-            if (string.IsNullOrEmpty(userInput)) return;
-            if (userInput.ToLower() == "exit")
-            {
-                Application.Current.Shutdown();
+            else {
+                foreach (var client in clients)
+                {
+                    if (client != sender)
+                    {
+                        NetworkStream stream = client.GetStream();
+                        stream.Write(data, 0, data.Length);
+                    }
+                }
             }
             
-
-            AddMessageToChat(userInput, true);//add the message into ui
-            byte[] data = Encoding.ASCII.GetBytes(userInput);
-            stream.Write(data, 0, data.Length);//send message to server
-            if (userInput.ToLower() == "exit")
-            {
-                stream.Close();
-            }
-            UserInput.Clear();
         }
         private void AddMessageToChat(string message, bool isClient, bool justConnect = false)
         {
