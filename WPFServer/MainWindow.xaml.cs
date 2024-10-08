@@ -11,6 +11,7 @@ using System.IO;
 using System.Windows.Input;
 using System.Collections.Generic;
 using System.Xml.Linq;
+using System.Linq;
 
 namespace WPFServer
 {
@@ -46,73 +47,170 @@ namespace WPFServer
             byte[] buffer = new byte[1024];
 
             int byteCount = await stream.ReadAsync(buffer, 0, buffer.Length);
-            string message = Encoding.ASCII.GetString(buffer, 0, byteCount);
+            string message = Encoding.ASCII.GetString(buffer, 0, byteCount);//receive name
 
             if (message.ToLower() == "exit")
             {
                 clients.Remove(client);
-                AddMessageToChat($"{message} disconnected", true);
+                string clientName = clientIdentifiers[client]; // Get the client name for the message
+                clientIdentifiers.Remove(client);//look here
+                AddMessageToChat($"{clientName} disconnected", true);
+                BroadcastClientList();//look here
             }
             else
             {
                 clientIdentifiers[client] = message;
                 AddMessageToChat($"{message} connected", true);
+                BroadcastClientList();
             }
         }
-
-
-        private async Task HandleClient(TcpClient client)
+        private void BroadcastClientList(/*TcpClient client = null*/)//this broacast connected client
         {
-            NetworkStream stream = client.GetStream();
-            byte[] buffer = new byte[1024];
-
+            var clientList = clientIdentifiers.Values.ToList();
+            string clientListString = string.Join(",", clientList);
+            foreach (var client in clients)
+            {
+                NetworkStream stream = client.GetStream();
+                byte[] data;
+                data = Encoding.ASCII.GetBytes("clientlist:" + clientListString);
+                stream.Write(data, 0, data.Length);
+            }
+        }
+        private async Task HandleClient(TcpClient sender)
+        {
+            NetworkStream stream = sender.GetStream();
             while (true)
             {
+                byte[] buffer = new byte[1024];
+                int byteCount = await stream.ReadAsync(buffer, 0, buffer.Length);
+                if (byteCount == 0) break;  // Client disconnected
+
+                string message = Encoding.ASCII.GetString(buffer, 0, byteCount);
+                string senderName = clientIdentifiers[sender];
+
+                if (message.ToLower() == "exit")
+                {
+                    clients.Remove(sender);
+                    clientIdentifiers.Remove(sender);
+                    AddMessageToChat($"{senderName} disconnected", true);
+                    BroadcastClientList();
+                    break;
+                }
+
+                // Split the message by the delimiter
+                string[] parts = message.Split(new string[] { "@->@" }, StringSplitOptions.None);
+                if (parts.Length == 2) // Ensure there is a recipient and a message
+                {
+                    string recipient = parts[0].Trim();
+                    string textMessage = parts[1].Trim();
+                    string textMessageWithRecipient = $"{senderName}: {textMessage}";
+
+                    // Display the message in the server's chat
+                    AddMessageToChat(textMessageWithRecipient, false);
+
+                    // Send the message to the targeted client
+                    byte[] data = Encoding.ASCII.GetBytes(textMessageWithRecipient);
+                    bool messageSent = false;
+
+                    foreach (var client in clients)
+                    {
+                        string clientName = clientIdentifiers[client];
+                        if (clientName.Equals(recipient))
+                        {
+                            try
+                            {
+                                NetworkStream streamC = client.GetStream();
+                                await streamC.WriteAsync(data, 0, data.Length); // Use async write
+                                messageSent = true;
+                            }
+                            catch (Exception ex)
+                            {
+                                // Handle exceptions (like client disconnects)
+                                AddMessageToChat($"Error sending message to {recipient}: {ex.Message}", false);
+                            }
+                            break; // Exit loop after sending message to the intended recipient
+                        }
+                    }
+
+                    // Optionally handle the case where the recipient is not found
+                    if (!messageSent)
+                    {
+                        AddMessageToChat($"Recipient {recipient} not found.", false);
+                    }
+                }
+                else
+                {
+                    AddMessageToChat("Message format is incorrect.", false);
+                }
+            }
+
+            sender.Close();
+        }
+
+        private async Task qHandleClient(TcpClient sender)
+        {
+            NetworkStream stream = sender.GetStream();
+            while (true)
+            {
+                byte[] buffer = new byte[1024];
                 int byteCount = await stream.ReadAsync(buffer, 0, buffer.Length);
                 if (byteCount == 0) break;  
 
                 string message = Encoding.ASCII.GetString(buffer, 0, byteCount);
-                string clientName = clientIdentifiers[client];
-                if (message.ToLower() == "exit")
+                string senderName = clientIdentifiers[sender];
+                string[] parts = message.Split(new string[] { "@->@" }, StringSplitOptions.None);
+                if (parts.Length == 2) 
                 {
-                    clients.Remove(client);
-                    AddMessageToChat($"{clientName} disconnected", true);
-                    break;
+                    string recipient = parts[0].Trim();
+                    string textMessage = parts[1];
+                    string textMessageWithRecipient = senderName + ": " + textMessage;
+                    if (message.ToLower() == "exit")
+                    {
+                        clients.Remove(sender);
+                        clientIdentifiers.Remove(sender);//look here
+                        AddMessageToChat($"{senderName} disconnected", true);
+                        BroadcastClientList();
+                        break;
+                    }
+                    string messageWithClient = senderName + ": " + textMessage;
+                    AddMessageToChat(messageWithClient, false);
+
+                    //write message to targeed client
+                    byte[] data = Encoding.ASCII.GetBytes(textMessageWithRecipient);
+                    foreach (var client in clients)
+                    {
+                        string clientName = clientIdentifiers[client];
+                        if (clientName.Equals(recipient))
+                        {
+                            NetworkStream streamC = client.GetStream();
+                            streamC.Write(data, 0, data.Length);
+                        }
+                    }
+
+                    //WriteToClient(messageWithClient, sender, recipient); 
                 }
-                string messageWithClient = clientName + ": " + message;
-                AddMessageToChat(messageWithClient, false);  
-                WriteToClient(messageWithClient, client); 
+                else { MessageBox.Show("WTH"); }
+
             }
 
-            client.Close();
+            sender.Close();
         }
-        private void WriteToClient(string message, TcpClient sender, bool firstTime = false)
+        private void WriteToClient(string message, TcpClient sender, string recipient)
         {
             byte[] data = Encoding.ASCII.GetBytes(message);
 
-            if (firstTime)
+            foreach (var client in clients)
             {
-                foreach (var client in clients)
+                string clientName = clientIdentifiers[client];
+                if (clientName.Equals(recipient))
                 {
-                    if (client == sender)
-                    {
-                        NetworkStream stream = client.GetStream();
-                        stream.Write(data, 0, data.Length);
-                    }
+                    NetworkStream stream = client.GetStream();
+                    stream.Write(data, 0, data.Length);
                 }
             }
-            else {
-                foreach (var client in clients)
-                {
-                    if (client != sender)
-                    {
-                        NetworkStream stream = client.GetStream();
-                        stream.Write(data, 0, data.Length);
-                    }
-                }
-            }
-            
+
         }
+
         private void AddMessageToChat(string message, bool justConnect = false)
         {
             TextBlock messageBlock = new TextBlock();
